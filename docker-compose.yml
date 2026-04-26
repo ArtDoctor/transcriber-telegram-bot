@@ -35,5 +35,23 @@ services:
     depends_on:
       - telegram-bot-api
 
+  telegram-cache-cleaner:
+    image: alpine:latest
+    restart: unless-stopped
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+    environment:
+      # Delete cached Telegram Bot API files older than this many minutes.
+      TELEGRAM_CACHE_MAX_AGE_MINUTES: 120
+      TELEGRAM_CACHE_CLEAN_INTERVAL_SECONDS: 3600
+    command: >
+      sh -c 'while true; do
+        echo "Cleaning Telegram Bot API cache files older than $${TELEGRAM_CACHE_MAX_AGE_MINUTES} minutes...";
+        find /var/lib/telegram-bot-api -type f -mmin +$${TELEGRAM_CACHE_MAX_AGE_MINUTES} -delete;
+        sleep $${TELEGRAM_CACHE_CLEAN_INTERVAL_SECONDS};
+      done'
+    depends_on:
+      - telegram-bot-api
+
 volumes:
   telegram-bot-api-data:

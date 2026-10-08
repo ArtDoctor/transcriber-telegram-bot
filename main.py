@@ -185,7 +185,26 @@ def download_youtube_media(url: str, download_type: str, out_dir: Path) -> tuple
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
+        "extractor_args": {
+            "youtube": {
+                # Android and visionOS clients bypass the datacenter IP "Sign in to confirm you’re not a bot" challenge
+                "player_client": ["android", "visionos", "web"],
+            }
+        },
     }
+
+    # Optional cookies file for age-gated or bot-flagged videos
+    env_cookie = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
+    cookie_candidates = [
+        Path(env_cookie) if env_cookie else None,
+        Path("cookies.txt"),
+        Path("cookies/cookies.txt"),
+    ]
+    for candidate in cookie_candidates:
+        if candidate and candidate.is_file():
+            ydl_opts["cookiefile"] = str(candidate.resolve())
+            logging.info("Using YouTube cookies from %s", candidate)
+            break
 
     js_runtimes = get_yt_dlp_js_runtimes()
     if js_runtimes:
@@ -735,7 +754,14 @@ async def process_youtube_download(
     except Exception as exc:
         logging.exception("YouTube download failed")
         error_text = str(exc)
-        if len(error_text) > 3500:
+        if "Sign in to confirm you’re not a bot" in error_text or "Use --cookies" in error_text:
+            error_text = (
+                "⚠️ YouTube is requiring bot verification on your VPS IP address.\n\n"
+                "💡 Quick fix:\n"
+                "1. Export your YouTube cookies using a browser extension (such as 'Get cookies.txt LOCALLY').\n"
+                "2. Save the file as 'cookies.txt' in the bot directory (or set YOUTUBE_COOKIES_FILE in .env)."
+            )
+        elif len(error_text) > 3500:
             error_text = error_text[:3500] + "…"
         await safe_edit(status_message, f"YouTube download failed:\n{error_text}")
 

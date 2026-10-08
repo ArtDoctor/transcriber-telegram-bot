@@ -78,7 +78,19 @@ For small files, or if you run `telegram-bot-api` separately:
 
 ---
 
+### YouTube Bot Verification on VPS (Cookies)
+
+YouTube sometimes challenges datacenter/VPS IP addresses with *"Sign in to confirm you’re not a bot"*.
+- The bot automatically uses `android` and `visionos` player clients to bypass this on most videos.
+- For restricted, age-gated, or flagged videos:
+  1. Export your YouTube cookies from your browser using an extension like **Get cookies.txt LOCALLY**.
+  2. Place the file as `cookies.txt` in the root of this project (or set `YOUTUBE_COOKIES_FILE=/path/to/cookies.txt` in `.env`).
+  3. The bot will automatically detect and authenticate with your cookies.
+
+---
+
 ## Useful commands
+
 
 ```bash
 # Run test suite

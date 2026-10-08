@@ -640,6 +640,55 @@ class TestCookiesAndProxy:
         path = get_youtube_cookies_path()
         assert path is None or path.is_file()
 
+    def test_download_youtube_media_options_with_cookies(self, tmp_path):
+        dummy_file = tmp_path / "song.mp3"
+        dummy_file.write_bytes(b"data")
+        fake_cookie = tmp_path / "cookies.txt"
+        fake_cookie.write_text("fake cookies")
+
+        with patch("main.get_youtube_cookies_path", return_value=fake_cookie), \
+             patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            mock_inst.extract_info.return_value = {"title": "Song"}
+
+            res_path, info = download_youtube_media("https://youtube.com/watch?v=123", "mp3", tmp_path)
+            opts = mock_ydl.call_args[0][0]
+            assert opts["cookiefile"] == str(fake_cookie)
+            assert "extractor_args" not in opts
+            assert opts["remote_components"] == ["ejs:github"]
+
+    def test_download_youtube_media_options_without_cookies(self, tmp_path):
+        dummy_file = tmp_path / "video.mp4"
+        dummy_file.write_bytes(b"data")
+
+        with patch("main.get_youtube_cookies_path", return_value=None), \
+             patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            mock_inst.extract_info.return_value = {"title": "Video"}
+
+            res_path, info = download_youtube_media("https://youtube.com/watch?v=123", "mp4", tmp_path)
+            opts = mock_ydl.call_args[0][0]
+            assert "cookiefile" not in opts
+            assert opts["extractor_args"]["youtube"]["player_client"] == ["android", "visionos"]
+            assert opts["remote_components"] == ["ejs:github"]
+
+    def test_download_youtube_media_player_client_env(self, tmp_path, monkeypatch):
+        dummy_file = tmp_path / "song.mp3"
+        dummy_file.write_bytes(b"data")
+        monkeypatch.setenv("YOUTUBE_PLAYER_CLIENT", "mweb,web")
+
+        with patch("main.get_youtube_cookies_path", return_value=None), \
+             patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            mock_inst.extract_info.return_value = {"title": "Song"}
+
+            res_path, info = download_youtube_media("https://youtube.com/watch?v=123", "mp3", tmp_path)
+            opts = mock_ydl.call_args[0][0]
+            assert opts["extractor_args"]["youtube"]["player_client"] == ["mweb", "web"]
+
 
 class TestMainApp:
     def test_main_missing_tokens(self, monkeypatch):

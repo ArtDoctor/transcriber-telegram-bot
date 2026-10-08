@@ -208,18 +208,28 @@ def download_youtube_media(url: str, download_type: str, out_dir: Path) -> tuple
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
-        "extractor_args": {
-            "youtube": {
-                # Android and visionOS clients avoid triggering the web client datacenter IP bot challenge
-                "player_client": ["android", "visionos"],
-            }
-        },
+        "remote_components": ["ejs:github"],
     }
 
     cookies_path = get_youtube_cookies_path()
     if cookies_path:
         ydl_opts["cookiefile"] = str(cookies_path)
         logging.info("Using YouTube cookies from %s", cookies_path)
+
+    player_client_env = os.getenv("YOUTUBE_PLAYER_CLIENT", "").strip()
+    if player_client_env:
+        ydl_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": [c.strip() for c in player_client_env.split(",") if c.strip()],
+            }
+        }
+    elif not cookies_path:
+        # Android and visionOS clients avoid triggering the web client datacenter IP bot challenge when unauthenticated
+        ydl_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["android", "visionos"],
+            }
+        }
 
     proxy = os.getenv("YOUTUBE_PROXY", "").strip()
     if proxy:

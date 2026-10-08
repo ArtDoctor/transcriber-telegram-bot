@@ -1,0 +1,3 @@
+# Netscape HTTP Cookie File
+# Export your YouTube cookies using a browser extension like "Get cookies.txt LOCALLY"
+# and save them in this directory as cookies.txt (or paste into .env as YOUTUBE_COOKIES_TEXT).

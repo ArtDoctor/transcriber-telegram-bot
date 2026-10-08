@@ -174,6 +174,29 @@ def compress_video_for_telegram(input_path: Path, output_path: Path) -> bool:
         return False
 
 
+def get_youtube_cookies_path() -> Path | None:
+    # 1. Directly from YOUTUBE_COOKIES_TEXT in .env
+    cookies_text = os.getenv("YOUTUBE_COOKIES_TEXT", "").strip()
+    if cookies_text and len(cookies_text) > 50:
+        target = Path(tempfile.gettempdir()) / "yt_cookies.txt"
+        target.write_text(cookies_text, encoding="utf-8")
+        return target
+
+    # 2. From YOUTUBE_COOKIES_FILE in .env
+    env_file = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
+    if env_file:
+        p = Path(env_file)
+        if p.is_file() and p.stat().st_size > 50:
+            return p.resolve()
+
+    # 3. From local cookies.txt file in workspace or subfolder
+    for candidate in [Path("cookies.txt"), Path("cookies/cookies.txt")]:
+        if candidate.is_file() and candidate.stat().st_size > 50:
+            return candidate.resolve()
+
+    return None
+
+
 def download_youtube_media(url: str, download_type: str, out_dir: Path) -> tuple[Path, dict[str, Any]]:
     """
     Synchronously downloads media from YouTube using yt-dlp.
@@ -187,24 +210,20 @@ def download_youtube_media(url: str, download_type: str, out_dir: Path) -> tuple
         "no_warnings": True,
         "extractor_args": {
             "youtube": {
-                # Android and visionOS clients bypass the datacenter IP "Sign in to confirm you’re not a bot" challenge
-                "player_client": ["android", "visionos", "web"],
+                # Android and visionOS clients avoid triggering the web client datacenter IP bot challenge
+                "player_client": ["android", "visionos"],
             }
         },
     }
 
-    # Optional cookies file for age-gated or bot-flagged videos
-    env_cookie = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
-    cookie_candidates = [
-        Path(env_cookie) if env_cookie else None,
-        Path("cookies.txt"),
-        Path("cookies/cookies.txt"),
-    ]
-    for candidate in cookie_candidates:
-        if candidate and candidate.is_file():
-            ydl_opts["cookiefile"] = str(candidate.resolve())
-            logging.info("Using YouTube cookies from %s", candidate)
-            break
+    cookies_path = get_youtube_cookies_path()
+    if cookies_path:
+        ydl_opts["cookiefile"] = str(cookies_path)
+        logging.info("Using YouTube cookies from %s", cookies_path)
+
+    proxy = os.getenv("YOUTUBE_PROXY", "").strip()
+    if proxy:
+        ydl_opts["proxy"] = proxy
 
     js_runtimes = get_yt_dlp_js_runtimes()
     if js_runtimes:
@@ -759,7 +778,7 @@ async def process_youtube_download(
                 "⚠️ YouTube is requiring bot verification on your VPS IP address.\n\n"
                 "💡 Quick fix:\n"
                 "1. Export your YouTube cookies using a browser extension (such as 'Get cookies.txt LOCALLY').\n"
-                "2. Save the file as 'cookies.txt' in the bot directory (or set YOUTUBE_COOKIES_FILE in .env)."
+                "2. Save the file as 'cookies.txt' in the bot directory, or paste its text in .env as YOUTUBE_COOKIES_TEXT."
             )
         elif len(error_text) > 3500:
             error_text = error_text[:3500] + "…"

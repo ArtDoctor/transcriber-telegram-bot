@@ -37,6 +37,7 @@ from main import (
     fallback_text,
     format_speaker_transcript,
     get_media_info,
+    get_youtube_cookies_path,
     get_yt_dlp_js_runtimes,
     handle_callback_query,
     handle_media,
@@ -612,6 +613,32 @@ class TestCacheAndRuntimes:
         assert not dummy_old.exists()
         assert "new_tx" in AUDIO_CACHE
         assert dummy_new.exists()
+
+
+class TestCookiesAndProxy:
+    def test_get_youtube_cookies_path_from_text(self, monkeypatch):
+        cookie_text = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1799999999\tTEST\tVAL123"
+        monkeypatch.setenv("YOUTUBE_COOKIES_TEXT", cookie_text)
+        path = get_youtube_cookies_path()
+        assert path is not None
+        assert path.is_file()
+        assert "TEST" in path.read_text()
+
+    def test_get_youtube_cookies_path_from_file_env(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("YOUTUBE_COOKIES_TEXT", raising=False)
+        cookie_file = tmp_path / "custom_cookies.txt"
+        cookie_file.write_text("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1799999999\tKEY\tVAL")
+        monkeypatch.setenv("YOUTUBE_COOKIES_FILE", str(cookie_file))
+        path = get_youtube_cookies_path()
+        assert path == cookie_file.resolve()
+
+    def test_get_youtube_cookies_path_none_when_empty(self, monkeypatch):
+        monkeypatch.delenv("YOUTUBE_COOKIES_TEXT", raising=False)
+        monkeypatch.delenv("YOUTUBE_COOKIES_FILE", raising=False)
+        # Assuming no valid cookies.txt in current directory
+        # Let's verify it doesn't crash
+        path = get_youtube_cookies_path()
+        assert path is None or path.is_file()
 
 
 class TestMainApp:

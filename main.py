@@ -568,12 +568,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         ]
     ])
 
-    await message.reply_text(
-        f"🔗 Trimmed link:\n{trimmed_url}\n\n"
-        "Choose how you want to download:",
+    await context.bot.send_message(
+        chat_id=message.chat_id,
+        text=(
+            f"🔗 Trimmed link:\n{trimmed_url}\n\n"
+            "Choose how you want to download:"
+        ),
         reply_markup=keyboard,
         disable_web_page_preview=False,
     )
+    with contextlib.suppress(Exception):
+        await message.delete()
 
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -587,15 +592,23 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer()
         download_type = "mp4" if data.startswith("yt:mp4:") else "mp3"
         video_id = data.split(":", 2)[2]
+        chat_id = query.message.chat_id
+
+        # Delete the bot's own prompt message containing the buttons
+        with contextlib.suppress(Exception):
+            await query.message.delete()
 
         label = "MP4 (1080p/Max)" if download_type == "mp4" else "MP3"
-        status = await query.message.reply_text(f"Queuing YouTube {label} download…")
+        status = await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Queuing YouTube {label} download…",
+        )
 
         asyncio.create_task(
             process_youtube_download(
                 context=context,
-                chat_id=query.message.chat_id,
-                reply_to_message_id=query.message.message_id,
+                chat_id=chat_id,
+                reply_to_message_id=None,
                 status_message=status,
                 video_id=video_id,
                 download_type=download_type,
@@ -642,7 +655,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 async def process_youtube_download(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
-    reply_to_message_id: int,
+    reply_to_message_id: int | None,
     status_message: Any,
     video_id: str,
     download_type: str,

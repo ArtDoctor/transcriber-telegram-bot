@@ -327,12 +327,17 @@ class TestAsyncHandlers:
         msg = AsyncMock()
         update.effective_message = msg
         msg.text = "https://www.youtube.com/watch?v=CzGTQseaM38&list=PLH7PIPKvCm38&index=8"
+        msg.chat_id = 999
         context = MagicMock()
+        bot = AsyncMock()
+        context.bot = bot
 
         await handle_text(update, context)
-        msg.reply_text.assert_awaited_once()
-        call_args = msg.reply_text.call_args
-        text_sent = call_args[0][0]
+        bot.send_message.assert_awaited_once()
+        msg.delete.assert_awaited_once()
+        call_args = bot.send_message.call_args
+        assert call_args[1]["chat_id"] == 999
+        text_sent = call_args[1]["text"]
         reply_markup = call_args[1]["reply_markup"]
 
         # Check trimmed URL is sent
@@ -367,15 +372,20 @@ class TestAsyncHandlers:
         query.message.chat_id = 111
         query.message.message_id = 222
         context = MagicMock()
+        bot = AsyncMock()
+        context.bot = bot
 
         with patch("main.process_youtube_download", AsyncMock()) as mock_dl:
             await handle_callback_query(update, context)
             query.answer.assert_awaited_once()
+            query.message.delete.assert_awaited_once()
+            bot.send_message.assert_awaited_once()
             # Wait for background task to run
             await asyncio.sleep(0.05)
             mock_dl.assert_called_once()
             assert mock_dl.call_args[1]["video_id"] == "CzGTQseaM38"
             assert mock_dl.call_args[1]["download_type"] == "mp4"
+            assert mock_dl.call_args[1]["reply_to_message_id"] is None
 
     async def test_handle_callback_query_mp3(self):
         update = MagicMock()
@@ -386,14 +396,19 @@ class TestAsyncHandlers:
         query.message.chat_id = 111
         query.message.message_id = 222
         context = MagicMock()
+        bot = AsyncMock()
+        context.bot = bot
 
         with patch("main.process_youtube_download", AsyncMock()) as mock_dl:
             await handle_callback_query(update, context)
             query.answer.assert_awaited_once()
+            query.message.delete.assert_awaited_once()
+            bot.send_message.assert_awaited_once()
             await asyncio.sleep(0.05)
             mock_dl.assert_called_once()
             assert mock_dl.call_args[1]["video_id"] == "CzGTQseaM38"
             assert mock_dl.call_args[1]["download_type"] == "mp3"
+            assert mock_dl.call_args[1]["reply_to_message_id"] is None
 
     async def test_handle_callback_query_transcribe_button(self, tmp_path):
         dummy_mp3 = tmp_path / "test.mp3"

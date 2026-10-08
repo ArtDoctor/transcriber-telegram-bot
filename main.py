@@ -114,9 +114,14 @@ def trim_youtube_url(text: str) -> str | None:
 
 def get_yt_dlp_js_runtimes() -> dict[str, Any] | None:
     """
-    Locates an available JavaScript runtime (Node.js or Deno) for yt-dlp.
+    Locates an available JavaScript runtime (Deno or Node.js) for yt-dlp.
     """
-    node_path = shutil.which("node") or shutil.which("nodejs") or shutil.which("deno")
+    node_path = (
+        shutil.which("deno")
+        or (Path("/usr/local/bin/deno").is_file() and "/usr/local/bin/deno")
+        or shutil.which("node")
+        or shutil.which("nodejs")
+    )
     if not node_path:
         home_nvm = os.path.expanduser("~/.nvm/versions/node")
         if os.path.isdir(home_nvm):
@@ -126,8 +131,8 @@ def get_yt_dlp_js_runtimes() -> dict[str, Any] | None:
                     node_path = candidate
                     break
     if node_path:
-        runtime = "deno" if "deno" in Path(node_path).name.lower() else "node"
-        return {runtime: {"path": node_path}}
+        runtime = "deno" if "deno" in Path(str(node_path)).name.lower() else "node"
+        return {runtime: {"path": str(node_path)}}
     return None
 
 

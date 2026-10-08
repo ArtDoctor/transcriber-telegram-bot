@@ -161,7 +161,9 @@ venv.bak/
 
 # YouTube cookies
 cookies.txt
+cookies*.txt
 *.cookies
+*.backup
 
 # Spyder project settings
 .spyderproject

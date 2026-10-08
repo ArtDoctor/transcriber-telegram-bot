@@ -1,3 +1,4 @@
-python-telegram-bot==22.7
+python-telegram-bot==22.8
 httpx==0.28.1
-python-dotenv==1.2.1
+python-dotenv==1.2.4
+yt-dlp==2026.8.19

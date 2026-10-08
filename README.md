@@ -1,12 +1,32 @@
-# Telegram ElevenLabs Transcriber Bot
+# Telegram ElevenLabs Transcriber & YouTube Downloader Bot
 
-Telegram bot that accepts voice/audio/video files, downloads them, sends them to ElevenLabs Scribe, and returns a speaker-labelled `.txt` transcript.
+Telegram bot that accepts:
+1. **Direct Media**: Voice notes, audio files, or video files, downloads them, transcribes them with ElevenLabs Scribe, and returns a speaker-labelled `.txt` transcript.
+2. **YouTube Links**: Automatically trims extra tracking/playlist parameters, offers format selection (**MP4 1080p/Max** or **MP3 Audio**), and provides a one-click button on downloaded audio to run transcription.
+
+---
+
+## Features
+
+- **Link Trimming**: Cleans YouTube links (e.g., `https://www.youtube.com/watch?v=CzGTQseaM38&list=PLH7PIPKvCm38&index=8` ➔ `https://www.youtube.com/watch?v=CzGTQseaM38`).
+- **Interactive Download Buttons**: Choose between Video (`MP4 1080p/Max`) and Audio (`MP3`).
+- **One-Click Transcription**: When downloading MP3, an inline **"📝 Transcribe Audio"** button is attached to the audio message.
+- **Large File Support (up to 2 GB)**: Uses a local Telegram Bot API server container to bypass the public 20 MB / 50 MB limits.
+- **Diarization & Multi-Speaker Detection**: Automatically formats transcripts with speaker labels (`[SPEAKER 1]`, `[SPEAKER 2]`).
+
+---
 
 ## Why the local Telegram Bot API server is needed
 
-The public Telegram Bot API only lets bots download files up to about 20 MB. For larger files (like a 74 MB audio file), run Telegram's Bot API server yourself and point the bot at it. This setup uses Docker Compose to run both services.
+The public Telegram Bot API only lets bots download files up to 20 MB and send files up to 50 MB. For larger media (like a 1080p video or long audio), run Telegram's Bot API server and point the bot at it. This setup uses Docker Compose to run both services.
 
-## Setup
+---
+
+## Setup & Deployment (VPS / Local)
+
+### Option 1: Docker Compose (Recommended for VPS)
+
+The Docker image automatically packages `ffmpeg`, `nodejs` (JavaScript runtime for yt-dlp), and all Python dependencies.
 
 1. Put your secrets in `.env`:
 
@@ -19,14 +39,13 @@ The public Telegram Bot API only lets bots download files up to about 20 MB. For
 
    `API_ID` and `API_HASH` come from <https://my.telegram.org/apps> and are used by the local Telegram Bot API server.
 
-2. If this bot has previously used Telegram's public Bot API, log it out once so the local server can take over:
+2. If this bot previously used Telegram's public Bot API, log it out once:
 
    ```bash
-   set -a; source .env; set +a
-   curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/logOut"
+   ./logout.sh
    ```
 
-3. Start the local Bot API server and the transcriber bot:
+3. Start services:
 
    ```bash
    docker compose up -d --build
@@ -38,43 +57,39 @@ The public Telegram Bot API only lets bots download files up to about 20 MB. For
    docker compose logs -f bot telegram-bot-api
    ```
 
-5. Send the bot a file larger than 20 MB. The compose setup sets:
+---
 
-   ```env
-   TELEGRAM_BOT_API_BASE_URL=http://telegram-bot-api:8081/bot
-   TELEGRAM_BOT_API_BASE_FILE_URL=http://telegram-bot-api:8081/file/bot
-   TELEGRAM_LOCAL_MODE=true
-   MAX_TELEGRAM_DOWNLOAD_BYTES=2147483648
+### Option 2: Bare-Metal Host / Local Python run
+
+For small files, or if you run `telegram-bot-api` separately:
+
+1. Ensure `ffmpeg` and `nodejs` are installed on the host VPS:
+
+   ```bash
+   sudo apt-get update && sudo apt-get install -y ffmpeg nodejs
    ```
 
-## Local Python run without Docker
+2. Run setup:
 
-For small files, or if you already run `telegram-bot-api` yourself:
+   ```bash
+   ./setup.sh
+   ./run.sh
+   ```
 
-```bash
-./setup.sh
-./run.sh
-```
-
-If your local Bot API server is on the host at port `8081`, add this to `.env` before `./run.sh`:
-
-```env
-TELEGRAM_BOT_API_BASE_URL=http://127.0.0.1:8081/bot
-TELEGRAM_BOT_API_BASE_FILE_URL=http://127.0.0.1:8081/file/bot
-MAX_TELEGRAM_DOWNLOAD_BYTES=2147483648
-# Use TELEGRAM_LOCAL_MODE=true only if the bot process can read the Bot API
-# server's --dir path directly at the same filesystem path.
-```
+---
 
 ## Useful commands
 
 ```bash
-# restart after code/config changes
+# Run test suite
+./venv/bin/pytest -v tests/
+
+# Restart after code/config changes
 docker compose up -d --build
 
-# stop everything
+# Stop everything
 docker compose down
 
-# stop and remove Bot API cached files too
+# Stop and remove Bot API cache files
 docker compose down -v
 ```

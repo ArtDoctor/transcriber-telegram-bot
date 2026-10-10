@@ -46,8 +46,14 @@ from main import (
     output_txt_name,
     process_media,
     process_youtube_download,
+    safe_delete,
     safe_edit,
+    clean_audio_filename,
+    clean_channel_name,
+    extract_telegram_thumbnail,
+    parse_audio_metadata,
     sanitize_filename,
+    set_audio_id3_tags,
     start,
     trim_youtube_url,
 )
@@ -95,6 +101,110 @@ class TestHelpers:
     def test_output_txt_name(self):
         assert output_txt_name("sample_audio.mp3") == "sample_audio.transcript.txt"
         assert output_txt_name("nested/dir/recording.m4a") == "recording.transcript.txt"
+
+    def test_clean_channel_name(self):
+        assert clean_channel_name("KIRXSHA - Topic") == "KIRXSHA"
+        assert clean_channel_name("United Sexi Boyz - Topic") == "United Sexi Boyz"
+        assert clean_channel_name("Artist – Topic") == "Artist"
+        assert clean_channel_name("Artist — Topic") == "Artist"
+        assert clean_channel_name("Artist Topic") == "Artist"
+        assert clean_channel_name("Narvent") == "Narvent"
+        assert clean_channel_name("") is None
+        assert clean_channel_name(None) is None
+
+    def test_parse_audio_metadata(self):
+        # 1. Hyphen separator with details
+        author, music = parse_audio_metadata(
+            "VXLLAIN, iGRES, ENXK - Crystal Skies (4K Music Video)",
+            {"uploader": "VXLLAIN"},
+        )
+        assert author == "VXLLAIN, iGRES, ENXK"
+        assert music == "Crystal Skies (4K Music Video)"
+
+        # 2. Slowed and reverb
+        author, music = parse_audio_metadata(
+            "Wiv - I love you. (Slowed and Reverb)",
+            {"uploader": "シルバ SILVAZZ"},
+        )
+        assert author == "Wiv"
+        assert music == "I love you. (Slowed and Reverb)"
+
+        # 3. Tilde separator
+        author, music = parse_audio_metadata(
+            "PASTEL GHOST ~ DARK BEACH",
+            {"uploader": "PASTEL GHOST"},
+        )
+        assert author == "PASTEL GHOST"
+        assert music == "DARK BEACH"
+
+        # 4. En-dash separator
+        author, music = parse_audio_metadata(
+            "Battle Tapes – Dreamboat (PXLTR)",
+            {"uploader": "Battle Tapes"},
+        )
+        assert author == "Battle Tapes"
+        assert music == "Dreamboat (PXLTR)"
+
+        # 5. Topic channel fallback when no separator in title
+        author, music = parse_audio_metadata(
+            "CELESTIAL",
+            {"uploader": "KIRXSHA - Topic", "artist": "KIRXSHA"},
+        )
+        assert author == "KIRXSHA"
+        assert music == "CELESTIAL"
+
+        # 6. Uploader fallback when no separator in title
+        author, music = parse_audio_metadata(
+            "Fainted (Sped Up)",
+            {"uploader": "Narvent"},
+        )
+        assert author == "Narvent"
+        assert music == "Fainted (Sped Up)"
+
+        # 7. Non-ASCII title and channel
+        author, music = parse_audio_metadata(
+            "Я Не Можу Забути Тебе (Ла Ла Ла)",
+            {"uploader": "United Sexi Boyz - Topic"},
+        )
+        assert author == "United Sexi Boyz"
+        assert music == "Я Не Можу Забути Тебе (Ла Ла Ла)"
+
+        # 8. Title not in Author - song name format uses channel name
+        author, music = parse_audio_metadata(
+            "Purple Dreams (Slowed)",
+            {"channel": "VXLLAIN"},
+        )
+        assert author == "VXLLAIN"
+        assert music == "Purple Dreams (Slowed)"
+
+        author, music = parse_audio_metadata(
+            "Random Podcast Episode 42",
+            {"channel": "Cool Creator"},
+        )
+        assert author == "Cool Creator"
+        assert music == "Random Podcast Episode 42"
+
+    def test_clean_audio_filename(self):
+        assert clean_audio_filename("Crystal Skies (4K Music Video)") == "Crystal Skies (4K Music Video)"
+        assert clean_audio_filename("Song/Name: What*is? this<>|") == "SongName Whatis this"
+        assert clean_audio_filename("Я Не Можу Забути Тебе") == "Я Не Можу Забути Тебе"
+        assert clean_audio_filename("") == "audio"
+
+    def test_set_audio_id3_tags(self, tmp_path):
+        dummy_mp3 = tmp_path / "song.mp3"
+        dummy_mp3.write_bytes(b"dummy")
+
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"), \
+             patch("subprocess.run") as mock_run:
+            def fake_run(cmd, **kwargs):
+                # Simulate ffmpeg writing output file
+                out_path = Path(cmd[-1])
+                out_path.write_bytes(b"tagged_bytes")
+                return MagicMock(returncode=0)
+
+            mock_run.side_effect = fake_run
+            set_audio_id3_tags(dummy_mp3, title="Crystal Skies", author="VXLLAIN")
+            assert dummy_mp3.read_bytes() == b"tagged_bytes"
 
 
 class TestYouTubeUrlTrimming:
@@ -458,7 +568,8 @@ class TestAsyncHandlers:
         bot.send_video.assert_awaited_once()
         call_kwargs = bot.send_video.call_args[1]
         assert call_kwargs["chat_id"] == 123
-        assert "Test Video" in call_kwargs["caption"]
+        assert call_kwargs["caption"] == "https://www.youtube.com/watch?v=CzGTQseaM38"
+        status_msg.delete.assert_awaited_once()
 
     async def test_process_youtube_download_auto_compress_on_public_limit(self, tmp_path, monkeypatch):
         context = MagicMock()
@@ -492,7 +603,9 @@ class TestAsyncHandlers:
 
         bot.send_video.assert_awaited_once()
         call_kwargs = bot.send_video.call_args[1]
+        assert "https://www.youtube.com/watch?v=CzGTQseaM38" in call_kwargs["caption"]
         assert "compressed to fit" in call_kwargs["caption"]
+        status_msg.delete.assert_awaited_once()
 
     async def test_process_youtube_download_oversized_exceeds_upload_limit(self, tmp_path, monkeypatch):
         context = MagicMock()
@@ -533,7 +646,7 @@ class TestAsyncHandlers:
         dummy_mp3 = tmp_path / "audio.mp3"
         dummy_mp3.write_bytes(b"dummy mp3 audio bytes")
 
-        with patch("main.download_youtube_media", return_value=(dummy_mp3, {"title": "Test Audio"})):
+        with patch("main.download_youtube_media", return_value=(dummy_mp3, {"title": "VXLLAIN, iGRES, ENXK - Crystal Skies (4K Music Video)"})):
             await process_youtube_download(
                 context=context,
                 chat_id=123,
@@ -546,11 +659,41 @@ class TestAsyncHandlers:
         bot.send_audio.assert_awaited_once()
         call_kwargs = bot.send_audio.call_args[1]
         assert call_kwargs["chat_id"] == 123
-        assert "Test Audio" in call_kwargs["caption"]
+        assert call_kwargs["caption"] == "https://www.youtube.com/watch?v=CzGTQseaM38"
+        assert call_kwargs["title"] == "Crystal Skies (4K Music Video)"
+        assert call_kwargs["performer"] == "VXLLAIN, iGRES, ENXK"
+        assert call_kwargs["audio"].filename == "Crystal Skies (4K Music Video).mp3"
+        status_msg.delete.assert_awaited_once()
         reply_markup = call_kwargs["reply_markup"]
         btn = reply_markup.inline_keyboard[0][0]
         assert "Transcribe Audio" in btn.text
         assert btn.callback_data.startswith("yt_tx:")
+
+    async def test_process_youtube_download_mp3_fallback_channel_author(self, tmp_path):
+        context = MagicMock()
+        bot = AsyncMock()
+        context.bot = bot
+        status_msg = AsyncMock()
+
+        dummy_mp3 = tmp_path / "audio.mp3"
+        dummy_mp3.write_bytes(b"dummy mp3 audio bytes")
+
+        with patch("main.download_youtube_media", return_value=(dummy_mp3, {"title": "Fainted (Sped Up)", "channel": "Narvent"})):
+            await process_youtube_download(
+                context=context,
+                chat_id=123,
+                reply_to_message_id=456,
+                status_message=status_msg,
+                video_id="CzGTQseaM38",
+                download_type="mp3",
+            )
+
+        bot.send_audio.assert_awaited_once()
+        call_kwargs = bot.send_audio.call_args[1]
+        assert call_kwargs["title"] == "Fainted (Sped Up)"
+        assert call_kwargs["performer"] == "Narvent"
+        assert call_kwargs["audio"].filename == "Fainted (Sped Up).mp3"
+        status_msg.delete.assert_awaited_once()
 
     async def test_process_media_local_path_success(self, tmp_path, monkeypatch):
         status_msg = AsyncMock()
@@ -580,6 +723,38 @@ class TestAsyncHandlers:
         # Telegram get_file should NOT have been called since we had local_path
         bot.get_file.assert_not_called()
         bot.send_document.assert_awaited_once()
+        assert bot.send_document.call_args[1]["caption"] is None
+        status_msg.delete.assert_awaited_once()
+
+    async def test_process_media_with_youtube_source_url(self, tmp_path, monkeypatch):
+        status_msg = AsyncMock()
+        context = MagicMock()
+        bot = AsyncMock()
+        context.bot = bot
+
+        local_audio = tmp_path / "audio.mp3"
+        local_audio.write_bytes(b"dummy audio content")
+
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "fake_key")
+        mock_stt_result = {
+            "words": [
+                {"text": "Hello world", "speaker_id": "spk_1", "type": "word"}
+            ]
+        }
+
+        with patch("main.call_elevenlabs_stt", AsyncMock(return_value=mock_stt_result)):
+            await process_media(
+                context=context,
+                chat_id=123,
+                reply_to_message_id=456,
+                status_message=status_msg,
+                local_path=local_audio,
+                source_url="https://www.youtube.com/watch?v=CzGTQseaM38",
+            )
+
+        bot.send_document.assert_awaited_once()
+        assert bot.send_document.call_args[1]["caption"] == "https://www.youtube.com/watch?v=CzGTQseaM38"
+        status_msg.delete.assert_awaited_once()
 
     async def test_handle_media_oversized(self, monkeypatch):
         update = MagicMock()
@@ -600,6 +775,27 @@ class TestAsyncHandlers:
         msg.reply_text.assert_awaited_once()
         reply_content = msg.reply_text.call_args[0][0]
         assert "50.0 MB" in reply_content
+
+    async def test_handle_media_with_youtube_url_in_caption(self):
+        update = MagicMock()
+        msg = AsyncMock()
+        update.effective_message = msg
+        msg.voice = None
+        msg.video = None
+        msg.document = None
+        msg.audio.file_id = "test_audio_id"
+        msg.audio.file_name = "song.mp3"
+        msg.audio.mime_type = "audio/mpeg"
+        msg.audio.file_size = 1024
+        msg.caption = "Check out https://www.youtube.com/watch?v=CzGTQseaM38"
+        context = MagicMock()
+
+        with patch("main.process_media", AsyncMock()) as mock_pm:
+            await handle_media(update, context)
+            msg.reply_text.assert_awaited_once()
+            await asyncio.sleep(0.01)
+            mock_pm.assert_called_once()
+            assert mock_pm.call_args[1]["source_url"] == "https://www.youtube.com/watch?v=CzGTQseaM38"
 
 
 class TestCacheAndRuntimes:
@@ -628,6 +824,32 @@ class TestCacheAndRuntimes:
         assert not dummy_old.exists()
         assert "new_tx" in AUDIO_CACHE
         assert dummy_new.exists()
+
+    async def test_safe_delete(self):
+        msg = AsyncMock()
+        await safe_delete(msg)
+        msg.delete.assert_awaited_once()
+
+        failing_msg = AsyncMock()
+        failing_msg.delete.side_effect = BadRequest("Message to delete not found")
+        await safe_delete(failing_msg)
+
+        await safe_delete(None)
+
+    def test_extract_telegram_thumbnail(self, tmp_path):
+        audio_file = tmp_path / "audio.mp3"
+        audio_file.write_bytes(b"dummy")
+        thumb_out = tmp_path / "thumb.jpg"
+
+        with patch("shutil.which", return_value=None):
+            assert extract_telegram_thumbnail(audio_file, thumb_out) is None
+
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            thumb_out.write_bytes(b"x" * 1000)
+            res = extract_telegram_thumbnail(audio_file, thumb_out)
+            assert res == thumb_out
 
 
 class TestCookiesAndProxy:
@@ -672,6 +894,9 @@ class TestCookiesAndProxy:
             assert opts["cookiefile"] == str(fake_cookie)
             assert "extractor_args" not in opts
             assert opts["remote_components"] == ["ejs:github"]
+            assert opts["writethumbnail"] is True
+            assert any(p.get("key") == "EmbedThumbnail" for p in opts["postprocessors"])
+            assert any(p.get("key") == "FFmpegThumbnailsConvertor" for p in opts["postprocessors"])
 
     def test_download_youtube_media_options_without_cookies(self, tmp_path):
         dummy_file = tmp_path / "video.mp4"

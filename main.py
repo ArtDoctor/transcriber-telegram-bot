@@ -101,6 +101,8 @@ YOUTUBE_URL_PATTERN = re.compile(
 
 
 def extract_youtube_video_id(text: str) -> str | None:
+    if not isinstance(text, str):
+        return None
     match = YOUTUBE_URL_PATTERN.search(text)
     return match.group(1) if match else None
 
@@ -258,16 +260,40 @@ def download_youtube_media(url: str, download_type: str, out_dir: Path) -> tuple
         ydl_opts["merge_output_format"] = "mp4"
     elif download_type == "mp3":
         ydl_opts["format"] = "bestaudio/best"
-        ydl_opts["postprocessors"] = [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }]
+        ydl_opts["writethumbnail"] = True
+        ydl_opts["postprocessors"] = [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            },
+            {
+                "key": "FFmpegThumbnailsConvertor",
+                "format": "jpg",
+            },
+            {
+                "key": "EmbedThumbnail",
+            },
+        ]
     else:
         raise ValueError(f"Unsupported download_type: {download_type}")
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as exc:
+        if download_type == "mp3" and ydl_opts.get("writethumbnail"):
+            logging.warning("Download with thumbnail failed (%s), retrying without thumbnail...", exc)
+            ydl_opts.pop("writethumbnail", None)
+            ydl_opts["postprocessors"] = [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }]
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+        else:
+            raise
 
     expected_ext = ".mp4" if download_type == "mp4" else ".mp3"
     candidates = [f for f in out_dir.iterdir() if f.is_file() and f.suffix.lower() == expected_ext]
@@ -347,6 +373,112 @@ async def safe_edit(message: Any, text: str) -> None:
             logging.warning("Could not edit status message: %s", exc)
     except TelegramError as exc:
         logging.warning("Could not edit status message: %s", exc)
+
+
+async def safe_delete(message: Any) -> None:
+    if not message:
+        return
+    with contextlib.suppress(Exception):
+        await message.delete()
+
+
+def extract_telegram_thumbnail(audio_path: Path, out_path: Path) -> Path | None:
+    """
+    Extracts embedded cover artwork from audio and resizes it for Telegram thumbnail:
+    JPEG, max 320x320, <= 200 KB.
+    """
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        return None
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i", str(audio_path),
+        "-an",
+        "-vcodec", "mjpeg",
+        "-vf", "scale='min(320,iw)':min'(320,ih)':force_original_aspect_ratio=decrease",
+        "-vframes", "1",
+        str(out_path),
+    ]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        if res.returncode == 0 and out_path.is_file() and 0 < out_path.stat().st_size <= 200 * 1024:
+            return out_path
+    except Exception as exc:
+        logging.warning("Thumbnail extraction for Telegram failed: %s", exc)
+    return None
+
+
+def clean_channel_name(name: str | None) -> str | None:
+    if not name:
+        return None
+    cleaned = re.sub(r"\s*[-–—~－]?\s*Topic$", "", name.strip(), flags=re.IGNORECASE).strip()
+    return cleaned or name.strip() or None
+
+
+def parse_audio_metadata(raw_title: str, info: dict[str, Any] | None = None) -> tuple[str | None, str]:
+    """
+    Parses 'Author - Music name (details)' from video title.
+    If the video title is not in the format 'Author - song name', uses channel name
+    as author while keeping the video title as music name.
+    """
+    raw_title = (raw_title or "").strip()
+    match = re.split(r"\s+[-–—~－]\s*|\s*[-–—~－]\s+", raw_title, maxsplit=1)
+    if len(match) == 2 and match[0].strip() and match[1].strip():
+        author = match[0].strip()
+        music_name = match[1].strip()
+        return author, music_name
+
+    music_name = raw_title or "audio"
+    author = None
+    if info:
+        channel = (
+            info.get("channel")
+            or info.get("uploader")
+            or info.get("channel_name")
+            or info.get("creator")
+            or info.get("artist")
+        )
+        if channel:
+            author = clean_channel_name(str(channel))
+    return author, music_name
+
+
+def clean_audio_filename(name: str) -> str:
+    cleaned = re.sub(r'[/\\:*?"<>|]', "", name).strip()
+    return cleaned[:120] or "audio"
+
+
+def set_audio_id3_tags(audio_path: Path, title: str, author: str | None) -> None:
+    """
+    Embeds title and artist (author) metadata tags into MP3 file using ffmpeg copy.
+    """
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path or not audio_path.is_file():
+        return
+
+    tmp_tagged = audio_path.with_name(f"tagged_{audio_path.name}")
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i", str(audio_path),
+        "-map", "0",
+        "-c", "copy",
+        "-id3v2_version", "3",
+        "-metadata", f"title={title}",
+    ]
+    if author:
+        cmd.extend(["-metadata", f"artist={author}"])
+
+    cmd.append(str(tmp_tagged))
+
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+        if res.returncode == 0 and tmp_tagged.is_file() and tmp_tagged.stat().st_size > 0:
+            tmp_tagged.replace(audio_path)
+    except Exception as exc:
+        logging.warning("Failed to set ID3 tags with ffmpeg: %s", exc)
+        tmp_tagged.unlink(missing_ok=True)
 
 
 async def heartbeat_status(status_message: Any, stop_event: asyncio.Event, started_at: float) -> None:
@@ -625,10 +757,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         local_path: Path | None = None
         file_id: str | None = None
         filename: str | None = None
+        source_url: str | None = None
 
         if cached and Path(cached["path"]).is_file():
             local_path = Path(cached["path"])
             filename = cached.get("filename")
+            source_url = cached.get("url")
         else:
             audio = query.message.audio or query.message.document
             if not audio:
@@ -636,6 +770,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 return
             file_id = audio.file_id
             filename = getattr(audio, "file_name", None) or f"audio_{query.message.message_id}.mp3"
+
+        if not source_url and query.message and query.message.caption:
+            source_url = trim_youtube_url(query.message.caption)
+
+        if not source_url and filename:
+            vid_match = re.search(r"\[([A-Za-z0-9_-]{11})\]", filename)
+            if vid_match:
+                source_url = f"https://www.youtube.com/watch?v={vid_match.group(1)}"
 
         asyncio.create_task(
             process_media(
@@ -647,6 +789,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 filename=filename or "audio.mp3",
                 mime_type="audio/mpeg",
                 local_path=local_path,
+                source_url=source_url,
             )
         )
         return
@@ -720,7 +863,7 @@ async def process_youtube_download(
 
                 if download_type == "mp4":
                     await safe_edit(status_message, "Uploading video to Telegram…")
-                    caption_text = f"🎬 {title[:180]}{compressed_note}"
+                    caption_text = f"{url}{compressed_note}" if compressed_note else url
                     try:
                         with downloaded_file.open("rb") as f:
                             await context.bot.send_video(
@@ -746,21 +889,28 @@ async def process_youtube_download(
                                 connect_timeout=TELEGRAM_CONNECT_TIMEOUT,
                                 pool_timeout=TELEGRAM_POOL_TIMEOUT,
                             )
-                    await safe_edit(status_message, "Done — video sent!")
+                    await safe_delete(status_message)
                     return
 
                 # MP3 download: save to local cache for fast transcription button
                 await safe_edit(status_message, "Uploading audio to Telegram…")
                 cleanup_audio_cache()
                 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+                author, music_name = parse_audio_metadata(title, info)
+                output_audio_name = f"{clean_audio_filename(music_name)}.mp3"
+                set_audio_id3_tags(downloaded_file, title=music_name, author=author)
+
                 tx_id = uuid.uuid4().hex[:12]
-                cached_file = CACHE_DIR / f"{tx_id}_{downloaded_file.name}"
+                cached_file = CACHE_DIR / f"{tx_id}_{output_audio_name}"
                 shutil.copy2(downloaded_file, cached_file)
 
                 AUDIO_CACHE[tx_id] = {
                     "path": cached_file,
-                    "filename": downloaded_file.name,
-                    "title": title,
+                    "filename": output_audio_name,
+                    "title": music_name,
+                    "author": author,
+                    "url": url,
                     "created_at": time.time(),
                 }
 
@@ -768,13 +918,19 @@ async def process_youtube_download(
                     [InlineKeyboardButton("📝 Transcribe Audio", callback_data=f"yt_tx:{tx_id}")]
                 ])
 
+                thumb_path = tmp_path / "thumb.jpg"
+                telegram_thumb = extract_telegram_thumbnail(downloaded_file, thumb_path)
+                thumb_bytes = telegram_thumb.read_bytes() if telegram_thumb else None
+
                 try:
                     with downloaded_file.open("rb") as f:
                         await context.bot.send_audio(
                             chat_id=chat_id,
-                            audio=InputFile(f, filename=downloaded_file.name),
-                            title=title[:100],
-                            caption=f"🎵 {title[:200]}",
+                            audio=InputFile(f, filename=output_audio_name),
+                            thumbnail=thumb_bytes,
+                            title=music_name[:100],
+                            performer=author[:100] if author else None,
+                            caption=url,
                             reply_markup=keyboard,
                             reply_to_message_id=reply_to_message_id,
                             read_timeout=TELEGRAM_READ_TIMEOUT,
@@ -787,8 +943,9 @@ async def process_youtube_download(
                     with downloaded_file.open("rb") as f:
                         await context.bot.send_document(
                             chat_id=chat_id,
-                            document=InputFile(f, filename=downloaded_file.name),
-                            caption=f"🎵 {title[:200]}",
+                            document=InputFile(f, filename=output_audio_name),
+                            thumbnail=thumb_bytes,
+                            caption=url,
                             reply_markup=keyboard,
                             reply_to_message_id=reply_to_message_id,
                             read_timeout=TELEGRAM_READ_TIMEOUT,
@@ -796,7 +953,7 @@ async def process_youtube_download(
                             connect_timeout=TELEGRAM_CONNECT_TIMEOUT,
                             pool_timeout=TELEGRAM_POOL_TIMEOUT,
                         )
-                await safe_edit(status_message, "Done — audio sent!")
+                await safe_delete(status_message)
 
     except Exception as exc:
         logging.exception("YouTube download failed")
@@ -832,6 +989,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    source_url = trim_youtube_url(message.caption) if message.caption else None
+    if not source_url and media.get("filename"):
+        vid_match = re.search(r"\[([A-Za-z0-9_-]{11})\]", media["filename"])
+        if vid_match:
+            source_url = f"https://www.youtube.com/watch?v={vid_match.group(1)}"
+
     status = await message.reply_text("Received. Queuing transcription…")
 
     asyncio.create_task(
@@ -843,6 +1006,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             file_id=media["file_id"],
             filename=sanitize_filename(media["filename"]),
             mime_type=media.get("mime_type"),
+            source_url=source_url,
         )
     )
 
@@ -856,6 +1020,7 @@ async def process_media(
     filename: str | None = None,
     mime_type: str | None = None,
     local_path: Path | None = None,
+    source_url: str | None = None,
 ) -> None:
     api_key = os.getenv("ELEVENLABS_API_KEY")
     if not api_key:
@@ -863,6 +1028,10 @@ async def process_media(
         return
 
     resolved_filename = filename or (local_path.name if local_path else "audio.mp3")
+    if not source_url and resolved_filename:
+        vid_match = re.search(r"\[([A-Za-z0-9_-]{11})\]", resolved_filename)
+        if vid_match:
+            source_url = f"https://www.youtube.com/watch?v={vid_match.group(1)}"
 
     try:
         async with TRANSCRIPTION_SEMAPHORE:
@@ -928,7 +1097,7 @@ async def process_media(
                     chat_id=chat_id,
                     document=InputFile(bio, filename=output_name),
                     filename=output_name,
-                    caption=f"Done: {output_name}",
+                    caption=source_url,
                     reply_to_message_id=reply_to_message_id,
                     read_timeout=TELEGRAM_READ_TIMEOUT,
                     write_timeout=TELEGRAM_WRITE_TIMEOUT,
@@ -941,7 +1110,7 @@ async def process_media(
                     with contextlib.suppress(Exception):
                         Path(local_path).unlink(missing_ok=True)
 
-                await safe_edit(status_message, "Done — transcript sent as a .txt file.")
+                await safe_delete(status_message)
 
     except Exception as exc:
         logging.exception("Transcription failed")

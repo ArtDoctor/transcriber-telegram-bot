@@ -30,6 +30,7 @@ from main import (
     call_elevenlabs_stt,
     cleanup_audio_cache,
     collect_words,
+    describe_youtube_egress,
     download_youtube_media,
     env_bool,
     env_int,
@@ -987,6 +988,23 @@ class TestCookiesAndProxy:
             assert "writethumbnail" not in retry_opts
             assert info == {"title": "Song"}
 
+    def test_describe_youtube_egress(self, monkeypatch):
+        monkeypatch.setenv("YOUTUBE_PROXY", "socks5h://warp:1080")
+        trace = b"fl=1\nip=104.28.1.2\nts=1\ncolo=FRA\nwarp=on\n"
+
+        with patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            mock_inst.urlopen.return_value.read.return_value = trace
+
+            assert describe_youtube_egress() == "ip=104.28.1.2 warp=on colo=FRA"
+            assert mock_ydl.call_args[0][0]["proxy"] == "socks5h://warp:1080"
+
+    def test_describe_youtube_egress_failure(self):
+        with patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_ydl.return_value.__enter__.return_value.urlopen.side_effect = OSError("refused")
+            assert describe_youtube_egress() == "check failed (refused)"
+
     async def test_process_youtube_download_bot_check_with_proxy(self, monkeypatch):
         context = MagicMock()
         context.bot = AsyncMock()
@@ -994,7 +1012,8 @@ class TestCookiesAndProxy:
         monkeypatch.setenv("YOUTUBE_PROXY", "socks5h://warp:1080")
         bot_error = yt_dlp.utils.DownloadError("ERROR: [youtube] abc: Sign in to confirm you’re not a bot.")
 
-        with patch("main.download_youtube_media", side_effect=bot_error):
+        with patch("main.download_youtube_media", side_effect=bot_error), \
+             patch("main.describe_youtube_egress", return_value="ip=1.2.3.4 warp=off colo=FRA"):
             await process_youtube_download(
                 context=context,
                 chat_id=123,
@@ -1007,6 +1026,7 @@ class TestCookiesAndProxy:
 
         final_text = status_msg.edit_text.call_args[0][0]
         assert "even through the proxy" in final_text
+        assert "warp=off" in final_text
         context.bot.delete_message.assert_not_awaited()
 
 

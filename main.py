@@ -209,6 +209,24 @@ def is_youtube_bot_check(error: Exception) -> bool:
     return "Sign in to confirm you’re not a bot" in text or "Use --cookies" in text
 
 
+def describe_youtube_egress() -> str:
+    """
+    Reports the IP yt-dlp requests leave from, and whether it is Cloudflare WARP.
+    The WARP proxy silently falls back to the VPS IP while WARP is disconnected.
+    """
+    opts: dict[str, Any] = {"quiet": True, "no_warnings": True}
+    proxy = os.getenv("YOUTUBE_PROXY", "").strip()
+    if proxy:
+        opts["proxy"] = proxy
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            trace = ydl.urlopen("https://www.cloudflare.com/cdn-cgi/trace").read().decode()
+    except Exception as exc:
+        return f"check failed ({exc})"
+    fields = dict(line.split("=", 1) for line in trace.splitlines() if "=" in line)
+    return f"ip={fields.get('ip')} warp={fields.get('warp')} colo={fields.get('colo')}"
+
+
 def download_youtube_media(url: str, download_type: str, out_dir: Path) -> tuple[Path, dict[str, Any]]:
     """
     Synchronously downloads media from YouTube using yt-dlp.
@@ -980,12 +998,15 @@ async def process_youtube_download(
         logging.exception("YouTube download failed")
         error_text = str(exc)
         if is_youtube_bot_check(exc) and os.getenv("YOUTUBE_PROXY", "").strip():
+            egress = await asyncio.to_thread(describe_youtube_egress)
+            logging.warning("YouTube bot check through proxy, egress: %s", egress)
             error_text = (
                 "⚠️ YouTube is requiring bot verification, even through the proxy (YOUTUBE_PROXY).\n\n"
                 "💡 Quick fix:\n"
                 "1. Try again in a few minutes.\n"
                 "2. If it keeps happening, restart the warp container to reconnect, "
-                "or set YOUTUBE_PROXY to a residential proxy."
+                "or set YOUTUBE_PROXY to a residential proxy.\n\n"
+                f"Proxy exit: {egress}"
             )
         elif is_youtube_bot_check(exc):
             error_text = (

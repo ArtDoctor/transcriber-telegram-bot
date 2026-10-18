@@ -204,6 +204,11 @@ def get_youtube_cookies_path() -> Path | None:
     return None
 
 
+def is_youtube_bot_check(error: Exception) -> bool:
+    text = str(error)
+    return "Sign in to confirm you’re not a bot" in text or "Use --cookies" in text
+
+
 def download_youtube_media(url: str, download_type: str, out_dir: Path) -> tuple[Path, dict[str, Any]]:
     """
     Synchronously downloads media from YouTube using yt-dlp.
@@ -282,7 +287,8 @@ def download_youtube_media(url: str, download_type: str, out_dir: Path) -> tuple
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
     except Exception as exc:
-        if download_type == "mp3" and ydl_opts.get("writethumbnail"):
+        # Retrying a bot check only sends YouTube another flagged request
+        if download_type == "mp3" and ydl_opts.get("writethumbnail") and not is_youtube_bot_check(exc):
             logging.warning("Download with thumbnail failed (%s), retrying without thumbnail...", exc)
             ydl_opts.pop("writethumbnail", None)
             ydl_opts["postprocessors"] = [{
@@ -958,12 +964,20 @@ async def process_youtube_download(
     except Exception as exc:
         logging.exception("YouTube download failed")
         error_text = str(exc)
-        if "Sign in to confirm you’re not a bot" in error_text or "Use --cookies" in error_text:
+        if is_youtube_bot_check(exc) and os.getenv("YOUTUBE_PROXY", "").strip():
+            error_text = (
+                "⚠️ YouTube is requiring bot verification, even through the proxy (YOUTUBE_PROXY).\n\n"
+                "💡 Quick fix:\n"
+                "1. Try again in a few minutes.\n"
+                "2. If it keeps happening, restart the warp container to reconnect, "
+                "or set YOUTUBE_PROXY to a residential proxy."
+            )
+        elif is_youtube_bot_check(exc):
             error_text = (
                 "⚠️ YouTube is requiring bot verification on your VPS IP address.\n\n"
                 "💡 Quick fix:\n"
-                "1. Export your YouTube cookies using a browser extension (such as 'Get cookies.txt LOCALLY').\n"
-                "2. Save the file as 'cookies.txt' in the bot directory, or paste its text in .env as YOUTUBE_COOKIES_TEXT."
+                "Set YOUTUBE_PROXY to route downloads through another IP. "
+                "With docker compose this defaults to the bundled Cloudflare WARP proxy (socks5h://warp:1080)."
             )
         elif len(error_text) > 3500:
             error_text = error_text[:3500] + "…"

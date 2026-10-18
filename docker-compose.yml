@@ -29,12 +29,39 @@ services:
       MAX_TELEGRAM_UPLOAD_BYTES: 2147483648
       TELEGRAM_READ_TIMEOUT: 900
       TELEGRAM_WRITE_TIMEOUT: 900
+      # Route yt-dlp through the warp service below unless a different proxy
+      # (e.g. a residential one) is set in .env.
+      YOUTUBE_PROXY: ${YOUTUBE_PROXY:-socks5h://warp:1080}
     volumes:
       # Required for --local mode: getFile returns paths inside the Bot API
       # server data directory, and PTB copies them directly.
       - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
     depends_on:
       - telegram-bot-api
+      - warp
+
+  # Cloudflare WARP exposed as a SOCKS5/HTTP proxy on warp:1080. YouTube flags
+  # datacenter IPs with "Sign in to confirm you're not a bot"; going out through
+  # WARP makes requests come from a Cloudflare IP instead of the VPS IP.
+  # https://github.com/cmj2002/warp-docker
+  warp:
+    image: caomingjun/warp:latest
+    restart: unless-stopped
+    # Allow access to /dev/net/tun (removed from runc's default device rules)
+    device_cgroup_rules:
+      - 'c 10:200 rwm'
+    environment:
+      WARP_SLEEP: 2
+    cap_add:
+      - MKNOD
+      - AUDIT_WRITE
+      - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      # Keeps the WARP registration across restarts.
+      - warp-data:/var/lib/cloudflare-warp
 
   telegram-cache-cleaner:
     image: alpine:latest
@@ -56,3 +83,4 @@ services:
 
 volumes:
   telegram-bot-api-data:
+  warp-data:

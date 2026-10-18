@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import yt_dlp
 from telegram import Update
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
@@ -928,6 +929,75 @@ class TestCookiesAndProxy:
             res_path, info = download_youtube_media("https://youtube.com/watch?v=123", "mp3", tmp_path)
             opts = mock_ydl.call_args[0][0]
             assert opts["extractor_args"]["youtube"]["player_client"] == ["mweb", "web"]
+
+    def test_download_youtube_media_proxy_env(self, tmp_path, monkeypatch):
+        dummy_file = tmp_path / "song.mp3"
+        dummy_file.write_bytes(b"data")
+        monkeypatch.setenv("YOUTUBE_PROXY", "socks5h://warp:1080")
+
+        with patch("main.get_youtube_cookies_path", return_value=None), \
+             patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            mock_inst.extract_info.return_value = {"title": "Song"}
+
+            download_youtube_media("https://youtube.com/watch?v=123", "mp3", tmp_path)
+            opts = mock_ydl.call_args[0][0]
+            assert opts["proxy"] == "socks5h://warp:1080"
+
+    def test_download_youtube_media_no_thumbnail_retry_on_bot_check(self, tmp_path):
+        bot_error = yt_dlp.utils.DownloadError(
+            "ERROR: [youtube] abc: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies"
+        )
+
+        with patch("main.get_youtube_cookies_path", return_value=None), \
+             patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            mock_inst.extract_info.side_effect = bot_error
+
+            with pytest.raises(yt_dlp.utils.DownloadError):
+                download_youtube_media("https://youtube.com/watch?v=123", "mp3", tmp_path)
+            assert mock_inst.extract_info.call_count == 1
+
+    def test_download_youtube_media_thumbnail_retry_on_other_errors(self, tmp_path):
+        dummy_file = tmp_path / "song.mp3"
+        dummy_file.write_bytes(b"data")
+
+        with patch("main.get_youtube_cookies_path", return_value=None), \
+             patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            mock_inst.extract_info.side_effect = [
+                yt_dlp.utils.DownloadError("ERROR: Postprocessing: thumbnail conversion failed"),
+                {"title": "Song"},
+            ]
+
+            res_path, info = download_youtube_media("https://youtube.com/watch?v=123", "mp3", tmp_path)
+            assert mock_inst.extract_info.call_count == 2
+            retry_opts = mock_ydl.call_args[0][0]
+            assert "writethumbnail" not in retry_opts
+            assert info == {"title": "Song"}
+
+    async def test_process_youtube_download_bot_check_with_proxy(self, monkeypatch):
+        context = MagicMock()
+        context.bot = AsyncMock()
+        status_msg = AsyncMock()
+        monkeypatch.setenv("YOUTUBE_PROXY", "socks5h://warp:1080")
+        bot_error = yt_dlp.utils.DownloadError("ERROR: [youtube] abc: Sign in to confirm you’re not a bot.")
+
+        with patch("main.download_youtube_media", side_effect=bot_error):
+            await process_youtube_download(
+                context=context,
+                chat_id=123,
+                reply_to_message_id=456,
+                status_message=status_msg,
+                video_id="CzGTQseaM38",
+                download_type="mp3",
+            )
+
+        final_text = status_msg.edit_text.call_args[0][0]
+        assert "even through the proxy" in final_text
 
 
 class TestMainApp:

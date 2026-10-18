@@ -81,9 +81,10 @@ For small files, or if you run `telegram-bot-api` separately:
 ### YouTube Bot Verification on VPS (Cookies)
 
 YouTube sometimes challenges datacenter/VPS IP addresses with *"Sign in to confirm you’re not a bot"*.
-- The bot automatically uses `android` and `visionos` player clients to bypass this on most videos.
+- **Cloudflare WARP proxy (default with Docker Compose)**: The compose file runs a `warp` container and sets `YOUTUBE_PROXY=socks5h://warp:1080`, so YouTube sees a Cloudflare IP instead of your VPS IP. It is free, but YouTube flags some WARP IPs too.
+- **Residential proxy (most reliable)**: Set `YOUTUBE_PROXY=http://user:pass@host:port` in `.env` to override the WARP default. The media itself also downloads through the proxy, so videos use far more proxy bandwidth than MP3s.
 - For restricted, age-gated, or flagged videos:
-  1. Export your YouTube cookies from your browser using an extension like **Get cookies.txt LOCALLY**.
+  1. Export your YouTube cookies from a **private/incognito window** with an extension like **Get cookies.txt LOCALLY**, then close that window. Cookies exported from a normal browser session get rotated by YouTube and stop working within days.
   2. Place the file as `cookies.txt` in the root of this project (or set `YOUTUBE_COOKIES_FILE=/path/to/cookies.txt` in `.env`).
   3. The bot will automatically detect and authenticate with your cookies.
 

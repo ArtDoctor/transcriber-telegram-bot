@@ -388,6 +388,13 @@ async def safe_delete(message: Any) -> None:
         await message.delete()
 
 
+async def delete_link_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int | None) -> None:
+    if message_id is None:
+        return
+    with contextlib.suppress(Exception):
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+
+
 def extract_telegram_thumbnail(audio_path: Path, out_path: Path) -> Path | None:
     """
     Extracts embedded cover artwork from audio and resizes it for Telegram thumbnail:
@@ -699,10 +706,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     trimmed_url = f"https://www.youtube.com/watch?v={video_id}"
+    # The user's link message is only deleted once the download has been sent,
+    # so its id rides along in the callback data.
+    callback_suffix = f"{video_id}:{message.message_id}"
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🎬 Video (MP4 1080p/Max)", callback_data=f"yt:mp4:{video_id}"),
-            InlineKeyboardButton("🎵 Audio (MP3)", callback_data=f"yt:mp3:{video_id}"),
+            InlineKeyboardButton("🎬 Video (MP4 1080p/Max)", callback_data=f"yt:mp4:{callback_suffix}"),
+            InlineKeyboardButton("🎵 Audio (MP3)", callback_data=f"yt:mp3:{callback_suffix}"),
         ]
     ])
 
@@ -715,8 +725,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         reply_markup=keyboard,
         disable_web_page_preview=False,
     )
-    with contextlib.suppress(Exception):
-        await message.delete()
 
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -729,7 +737,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     if data.startswith("yt:mp4:") or data.startswith("yt:mp3:"):
         await query.answer()
         download_type = "mp4" if data.startswith("yt:mp4:") else "mp3"
-        video_id = data.split(":", 2)[2]
+        parts = data.split(":")
+        video_id = parts[2]
+        # Buttons sent before the link message id was added have no 4th part
+        link_message_id = int(parts[3]) if len(parts) > 3 else None
         chat_id = query.message.chat_id
 
         # Delete the bot's own prompt message containing the buttons
@@ -750,6 +761,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 status_message=status,
                 video_id=video_id,
                 download_type=download_type,
+                link_message_id=link_message_id,
             )
         )
         return
@@ -808,6 +820,7 @@ async def process_youtube_download(
     status_message: Any,
     video_id: str,
     download_type: str,
+    link_message_id: int | None = None,
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video_id}"
     label = "MP4 (1080p/Max)" if download_type == "mp4" else "MP3"
@@ -896,6 +909,7 @@ async def process_youtube_download(
                                 pool_timeout=TELEGRAM_POOL_TIMEOUT,
                             )
                     await safe_delete(status_message)
+                    await delete_link_message(context, chat_id, link_message_id)
                     return
 
                 # MP3 download: save to local cache for fast transcription button
@@ -960,6 +974,7 @@ async def process_youtube_download(
                             pool_timeout=TELEGRAM_POOL_TIMEOUT,
                         )
                 await safe_delete(status_message)
+                await delete_link_message(context, chat_id, link_message_id)
 
     except Exception as exc:
         logging.exception("YouTube download failed")

@@ -439,13 +439,15 @@ class TestAsyncHandlers:
         update.effective_message = msg
         msg.text = "https://www.youtube.com/watch?v=CzGTQseaM38&list=PLH7PIPKvCm38&index=8"
         msg.chat_id = 999
+        msg.message_id = 555
         context = MagicMock()
         bot = AsyncMock()
         context.bot = bot
 
         await handle_text(update, context)
         bot.send_message.assert_awaited_once()
-        msg.delete.assert_awaited_once()
+        # The link is only deleted after a successful download
+        msg.delete.assert_not_awaited()
         call_args = bot.send_message.call_args
         assert call_args[1]["chat_id"] == 999
         text_sent = call_args[1]["text"]
@@ -458,9 +460,9 @@ class TestAsyncHandlers:
         assert len(reply_markup.inline_keyboard[0]) == 2
         btn_mp4, btn_mp3 = reply_markup.inline_keyboard[0]
         assert "MP4" in btn_mp4.text
-        assert btn_mp4.callback_data == "yt:mp4:CzGTQseaM38"
+        assert btn_mp4.callback_data == "yt:mp4:CzGTQseaM38:555"
         assert "MP3" in btn_mp3.text
-        assert btn_mp3.callback_data == "yt:mp3:CzGTQseaM38"
+        assert btn_mp3.callback_data == "yt:mp3:CzGTQseaM38:555"
 
     async def test_handle_text_regular_message(self):
         update = MagicMock()
@@ -478,7 +480,7 @@ class TestAsyncHandlers:
         update = MagicMock()
         query = AsyncMock()
         update.callback_query = query
-        query.data = "yt:mp4:CzGTQseaM38"
+        query.data = "yt:mp4:CzGTQseaM38:555"
         query.message = AsyncMock()
         query.message.chat_id = 111
         query.message.message_id = 222
@@ -497,6 +499,7 @@ class TestAsyncHandlers:
             assert mock_dl.call_args[1]["video_id"] == "CzGTQseaM38"
             assert mock_dl.call_args[1]["download_type"] == "mp4"
             assert mock_dl.call_args[1]["reply_to_message_id"] is None
+            assert mock_dl.call_args[1]["link_message_id"] == 555
 
     async def test_handle_callback_query_mp3(self):
         update = MagicMock()
@@ -520,6 +523,7 @@ class TestAsyncHandlers:
             assert mock_dl.call_args[1]["video_id"] == "CzGTQseaM38"
             assert mock_dl.call_args[1]["download_type"] == "mp3"
             assert mock_dl.call_args[1]["reply_to_message_id"] is None
+            assert mock_dl.call_args[1]["link_message_id"] is None
 
     async def test_handle_callback_query_transcribe_button(self, tmp_path):
         dummy_mp3 = tmp_path / "test.mp3"
@@ -564,6 +568,7 @@ class TestAsyncHandlers:
                 status_message=status_msg,
                 video_id="CzGTQseaM38",
                 download_type="mp4",
+                link_message_id=555,
             )
 
         bot.send_video.assert_awaited_once()
@@ -571,6 +576,7 @@ class TestAsyncHandlers:
         assert call_kwargs["chat_id"] == 123
         assert call_kwargs["caption"] == "https://www.youtube.com/watch?v=CzGTQseaM38"
         status_msg.delete.assert_awaited_once()
+        bot.delete_message.assert_awaited_once_with(chat_id=123, message_id=555)
 
     async def test_process_youtube_download_auto_compress_on_public_limit(self, tmp_path, monkeypatch):
         context = MagicMock()
@@ -655,9 +661,11 @@ class TestAsyncHandlers:
                 status_message=status_msg,
                 video_id="CzGTQseaM38",
                 download_type="mp3",
+                link_message_id=555,
             )
 
         bot.send_audio.assert_awaited_once()
+        bot.delete_message.assert_awaited_once_with(chat_id=123, message_id=555)
         call_kwargs = bot.send_audio.call_args[1]
         assert call_kwargs["chat_id"] == 123
         assert call_kwargs["caption"] == "https://www.youtube.com/watch?v=CzGTQseaM38"
@@ -994,10 +1002,12 @@ class TestCookiesAndProxy:
                 status_message=status_msg,
                 video_id="CzGTQseaM38",
                 download_type="mp3",
+                link_message_id=555,
             )
 
         final_text = status_msg.edit_text.call_args[0][0]
         assert "even through the proxy" in final_text
+        context.bot.delete_message.assert_not_awaited()
 
 
 class TestMainApp:

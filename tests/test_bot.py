@@ -939,6 +939,39 @@ class TestCookiesAndProxy:
             opts = mock_ydl.call_args[0][0]
             assert opts["extractor_args"]["youtube"]["player_client"] == ["mweb", "web"]
 
+    def test_download_youtube_media_pot_provider_env(self, tmp_path, monkeypatch):
+        dummy_file = tmp_path / "song.mp3"
+        dummy_file.write_bytes(b"data")
+        monkeypatch.setenv("POT_PROVIDER_URL", "http://bgutil-provider:4416")
+
+        with patch("main.get_youtube_cookies_path", return_value=None), \
+             patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            mock_inst.extract_info.return_value = {"title": "Song"}
+
+            res_path, info = download_youtube_media("https://youtube.com/watch?v=123", "mp3", tmp_path)
+            opts = mock_ydl.call_args[0][0]
+            assert opts["extractor_args"]["youtubepot-bgutilhttp"]["base_url"] == ["http://bgutil-provider:4416"]
+            assert opts["extractor_args"]["youtube"]["player_client"] == ["web", "mweb"]
+
+    def test_download_youtube_media_pot_provider_with_custom_client(self, tmp_path, monkeypatch):
+        dummy_file = tmp_path / "song.mp3"
+        dummy_file.write_bytes(b"data")
+        monkeypatch.setenv("POT_PROVIDER_URL", "http://bgutil-provider:4416")
+        monkeypatch.setenv("YOUTUBE_PLAYER_CLIENT", "ios,android")
+
+        with patch("main.get_youtube_cookies_path", return_value=None), \
+             patch("yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            mock_inst.extract_info.return_value = {"title": "Song"}
+
+            res_path, info = download_youtube_media("https://youtube.com/watch?v=123", "mp3", tmp_path)
+            opts = mock_ydl.call_args[0][0]
+            assert opts["extractor_args"]["youtubepot-bgutilhttp"]["base_url"] == ["http://bgutil-provider:4416"]
+            assert opts["extractor_args"]["youtube"]["player_client"] == ["ios", "android"]
+
     def test_download_youtube_media_proxy_env(self, tmp_path, monkeypatch):
         dummy_file = tmp_path / "song.mp3"
         dummy_file.write_bytes(b"data")

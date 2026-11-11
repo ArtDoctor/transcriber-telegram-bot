@@ -32,6 +32,7 @@ services:
       # Route yt-dlp through the warp service below unless a different proxy
       # (e.g. a residential one) is set in .env.
       YOUTUBE_PROXY: ${YOUTUBE_PROXY:-socks5h://warp:1080}
+      POT_PROVIDER_URL: ${POT_PROVIDER_URL:-http://bgutil-provider:4416}
     volumes:
       # Required for --local mode: getFile returns paths inside the Bot API
       # server data directory, and PTB copies them directly.
@@ -39,6 +40,16 @@ services:
     depends_on:
       - telegram-bot-api
       - warp
+      - bgutil-provider
+
+  # Proof-of-Origin Token (POT) provider sidecar for yt-dlp. Automatically
+  # generates Botguard challenge tokens on-the-fly to bypass YouTube's
+  # "Sign in to confirm you're not a bot" checks on datacenter/cloud IPs.
+  # https://github.com/Brainicism/bgutil-ytdlp-pot-provider
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    restart: unless-stopped
+    init: true
 
   # Cloudflare WARP exposed as a SOCKS5/HTTP proxy on warp:1080. YouTube flags
   # datacenter IPs with "Sign in to confirm you're not a bot"; going out through

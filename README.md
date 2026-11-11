@@ -78,15 +78,18 @@ For small files, or if you run `telegram-bot-api` separately:
 
 ---
 
-### YouTube Bot Verification on VPS (Cookies)
+### YouTube Bot Verification on VPS
 
-YouTube sometimes challenges datacenter/VPS IP addresses with *"Sign in to confirm you’re not a bot"*.
-- **Cloudflare WARP proxy (default with Docker Compose)**: The compose file runs a `warp` container and sets `YOUTUBE_PROXY=socks5h://warp:1080`, so YouTube sees a Cloudflare IP instead of your VPS IP. It is free, but YouTube flags some WARP IPs too.
-- **Residential proxy (most reliable)**: Set `YOUTUBE_PROXY=http://user:pass@host:port` in `.env` to override the WARP default. The media itself also downloads through the proxy, so videos use far more proxy bandwidth than MP3s.
-- For restricted, age-gated, or flagged videos:
-  1. Export your YouTube cookies from a **private/incognito window** with an extension like **Get cookies.txt LOCALLY**, then close that window. Cookies exported from a normal browser session get rotated by YouTube and stop working within days.
-  2. Place the file as `cookies.txt` in the root of this project (or set `YOUTUBE_COOKIES_FILE=/path/to/cookies.txt` in `.env`).
-  3. The bot will automatically detect and authenticate with your cookies.
+YouTube often challenges datacenter, cloud, and VPN IP addresses with *"Sign in to confirm you’re not a bot"*.
+
+- **Proof-of-Origin Token (POT) Provider (Bundled & Self-Contained)**:
+  Docker Compose includes the `bgutil-provider` service (`brainicism/bgutil-ytdlp-pot-provider:latest`) listening on port 4416. The bot uses `bgutil-ytdlp-pot-provider` with yt-dlp to dynamically generate Botguard PO tokens for YouTube's `web` and `mweb` clients on the fly. This prevents the bot verification challenge without requiring manual cookies.
+- **Cloudflare WARP proxy (default with Docker Compose)**:
+  The compose file runs a `warp` container and sets `YOUTUBE_PROXY=socks5h://warp:1080`, routing egress through Cloudflare's network.
+- **Cookies (`cookies.txt`) — Note on Expiration**:
+  Browser cookies exported to `cookies.txt` generally **stop working after ~2 days**. Google detects session/IP mismatches between your local browser and server/datacenter IPs, rotating or invalidating session tokens. Use `cookies.txt` (or `YOUTUBE_COOKIES_TEXT`) only as a temporary override for age-restricted videos.
+- **Residential proxy (most resilient)**:
+  Set `YOUTUBE_PROXY=http://user:pass@host:port` in `.env` to route downloads through a residential IP. Because traffic appears as regular home ISP traffic, YouTube does not trigger bot verification challenges. Residential proxy data usage is minimal if downloading audio/MP3 (~5–10 MB per download).
 
 ---
 
